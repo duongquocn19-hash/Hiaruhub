@@ -1,0 +1,551 @@
+if not game:IsLoaded() then
+    game.Loaded:Wait()
+end
+
+-- Check game
+local placeId = game.PlaceId
+local validPlaces = {2753915549, 4442272183, 7449423635}
+local isValidPlace = false
+
+for _, id in ipairs(validPlaces) do
+    if placeId == id then
+        isValidPlace = true
+        break
+    end
+end
+
+if not isValidPlace then
+    game.Players.LocalPlayer:Kick("Script chỉ hoạt động trong Blox Fruit!")
+    return
+end
+
+-- Services
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
+local TeleportService = game:GetService("TeleportService")
+local RunService = game:GetService("RunService")
+
+-- Player
+local Player = Players.LocalPlayer
+local Character = Player.Character or Player.CharacterAdded:Wait()
+local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+
+-- Simple Mobile Config
+local Config = {
+    -- Farm Settings
+    AutoSelectTeam = true,
+    SelectPirates = false, -- false = Marines
+    MaxFruits = 10,
+    ScanDistance = 300, -- Giảm cho mobile
+    ServerHopDelay = 5,
+    
+    -- Mobile Optimization
+    LowMemoryMode = true,
+    SimpleGUI = true,
+    DisableEffects = true,
+    
+    -- Anti-Ban Lite
+    UseSimpleAntiBan = true,
+    RandomDelays = true,
+    MaxActionsPerMinute = 30 -- Giới hạn cho mobile
+}
+
+-- Statistics
+local Stats = {
+    FruitsCollected = 0,
+    ServersHopped = 0,
+    StartTime = os.time()
+}
+
+-- Simple Anti-Ban for Mobile
+local AntiBan = {
+    LastAction = tick(),
+    ActionCount = 0,
+    DetectionLevel = 0,
+    
+    SafeWait = function(seconds)
+        if Config.RandomDelays then
+            local randomFactor = math.random(80, 120) / 100
+            seconds = seconds * randomFactor
+        end
+        wait(math.min(seconds, 2)) -- Max wait 2s for mobile
+    end,
+    
+    CheckRateLimit = function()
+        local currentTime = tick()
+        local timeDiff = currentTime - AntiBan.LastAction
+        local maxActions = Config.MaxActionsPerMinute
+        
+        if timeDiff > 60 then -- Reset mỗi phút
+            AntiBan.ActionCount = 0
+            AntiBan.LastAction = currentTime
+        end
+        
+        if AntiBan.ActionCount > maxActions then
+            local waitTime = math.random(5, 10)
+            print("[Mobile] Rate limit reached, waiting " .. waitTime .. "s")
+            wait(waitTime)
+            AntiBan.ActionCount = 0
+        end
+        
+        AntiBan.ActionCount = AntiBan.ActionCount + 1
+    end
+}
+
+-- Mobile GUI Setup
+local function CreateMobileGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "MobileFarmGUI"
+    ScreenGui.Parent = Player:WaitForChild("PlayerGui")
+    ScreenGui.ResetOnSpawn = false
+    
+    -- Main Frame
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Size = UDim2.new(0, 250, 0, 300)
+    MainFrame.Position = UDim2.new(0.5, -125, 0.5, -150)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    
+    -- Title
+    local Title = Instance.new("TextLabel")
+    Title.Size = UDim2.new(1, 0, 0, 40)
+    Title.Position = UDim2.new(0, 0, 0, 0)
+    Title.Text = "Mobile Fruit Farmer"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+    Title.Parent = MainFrame
+    
+    -- Toggle Buttons
+    local buttons = {
+        {"Start Farm", Color3.fromRGB(0, 170, 0)},
+        {"Stop Farm", Color3.fromRGB(170, 0, 0)},
+        {"Collect Nearest", Color3.fromRGB(0, 100, 200)},
+        {"Team: Marines", Color3.fromRGB(0, 120, 200)},
+        {"Server Hop", Color3.fromRGB(200, 150, 0)}
+    }
+    
+    local buttonFunctions = {}
+    
+    for i, btnData in ipairs(buttons) do
+        local Button = Instance.new("TextButton")
+        Button.Size = UDim2.new(0.9, 0, 0, 40)
+        Button.Position = UDim2.new(0.05, 0, 0, 45 * i)
+        Button.Text = btnData[1]
+        Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Button.BackgroundColor3 = btnData[2]
+        Button.Parent = MainFrame
+        
+        buttonFunctions[i] = Button
+    end
+    
+    -- Stats Display
+    local StatsLabel = Instance.new("TextLabel")
+    StatsLabel.Size = UDim2.new(0.9, 0, 0, 60)
+    StatsLabel.Position = UDim2.new(0.05, 0, 0, 240)
+    StatsLabel.Text = "Collected: 0\nServers: 0"
+    StatsLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    StatsLabel.BackgroundTransparency = 1
+    StatsLabel.TextXAlignment = Enum.TextXAlignment.Left
+    StatsLabel.TextYAlignment = Enum.TextYAlignment.Top
+    StatsLabel.Parent = MainFrame
+    
+    -- Close Button
+    local CloseButton = Instance.new("TextButton")
+    CloseButton.Size = UDim2.new(0, 30, 0, 30)
+    CloseButton.Position = UDim2.new(1, -30, 0, 5)
+    CloseButton.Text = "X"
+    CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CloseButton.BackgroundColor3 = Color3.fromRGB(200, 0, 0)
+    CloseButton.Parent = MainFrame
+    
+    -- Make draggable
+    local dragging = false
+    local dragInput, dragStart, startPos
+    
+    Title.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+        end
+    end)
+    
+    Title.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    
+    game:GetService("UserInputService").InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.Touch then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X,
+                                          startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    return {
+        ScreenGui = ScreenGui,
+        Buttons = buttonFunctions,
+        StatsLabel = StatsLabel,
+        CloseButton = CloseButton,
+        MainFrame = MainFrame
+    }
+end
+
+-- Team Selection
+local function SelectTeam()
+    if not Config.AutoSelectTeam then return end
+    
+    AntiBan.SafeWait(2)
+    
+    local teamRemote = ReplicatedStorage:FindFirstChild("JoinTeam") or 
+                      ReplicatedStorage:FindFirstChild("SetTeam")
+    
+    if teamRemote then
+        local teamName = Config.SelectPirates and "Pirates" or "Marines"
+        pcall(function()
+            teamRemote:FireServer(teamName)
+            print("[Mobile] Selected team: " .. teamName)
+        end)
+    end
+    
+    AntiBan.SafeWait(1)
+end
+
+-- Find Fruits (Mobile Optimized)
+local function FindFruits()
+    local fruits = {}
+    local characterPos = HumanoidRootPart.Position
+    
+    -- Simple scanning for mobile
+    for _, obj in pairs(Workspace:GetChildren()) do
+        if obj.Name == "Fruit" or obj.Name == "Blox Fruit" then
+            if obj:FindFirstChild("Handle") then
+                local distance = (characterPos - obj.Handle.Position).Magnitude
+                if distance <= Config.ScanDistance then
+                    table.insert(fruits, {
+                        Object = obj,
+                        Distance = distance,
+                        Position = obj.Handle.Position
+                    })
+                end
+            end
+        end
+    end
+    
+    -- Sort by distance
+    table.sort(fruits, function(a, b)
+        return a.Distance < b.Distance
+    end)
+    
+    return fruits
+end
+
+-- Simple Movement (Mobile Friendly)
+local function MoveToPosition(position)
+    local steps = 10 -- Fewer steps for mobile
+    local currentPos = HumanoidRootPart.Position
+    
+    for i = 1, steps do
+        local progress = i / steps
+        local lerpPos = currentPos:Lerp(position, progress)
+        
+        HumanoidRootPart.CFrame = CFrame.new(
+            lerpPos.X,
+            lerpPos.Y + 5, -- Stay above ground
+            lerpPos.Z
+        )
+        
+        AntiBan.SafeWait(0.1)
+    end
+end
+
+-- Collect Fruit
+local function CollectFruit(fruitObj)
+    if not fruitObj or not fruitObj:FindFirstChild("Handle") then
+        return false
+    end
+    
+    AntiBan.CheckRateLimit()
+    
+    local fruitName = fruitObj.Name
+    local fruitPos = fruitObj.Handle.Position
+    
+    print("[Mobile] Collecting: " .. fruitName)
+    
+    -- Move to fruit
+    MoveToPosition(fruitPos)
+    AntiBan.SafeWait(0.5)
+    
+    -- Try to collect
+    local fruitRemote = ReplicatedStorage:FindFirstChild("FruitRemote") or 
+                       ReplicatedStorage:FindFirstChild("Fruit")
+    
+    if fruitRemote then
+        pcall(function()
+            fruitRemote:FireServer("Collect", fruitObj)
+            Stats.FruitsCollected = Stats.FruitsCollected + 1
+            print("[Mobile] Collected! Total: " .. Stats.FruitsCollected)
+            return true
+        end)
+    else
+        -- Fallback for mobile
+        pcall(function()
+            fruitObj.Handle.CFrame = HumanoidRootPart.CFrame
+            wait(0.5)
+            Stats.FruitsCollected = Stats.FruitsCollected + 1
+            return true
+        end)
+    end
+    
+    AntiBan.SafeWait(1)
+    return false
+end
+
+-- Server Hop (Simple for Mobile)
+local function SimpleServerHop()
+    print("[Mobile] Changing server...")
+    Stats.ServersHopped = Stats.ServersHopped + 1
+    
+    AntiBan.SafeWait(Config.ServerHopDelay)
+    
+    local servers = {}
+    local placeId = game.PlaceId
+    
+    -- Try to find servers
+    pcall(function()
+        local success, result = pcall(function()
+            return game:HttpGet("https://games.roblox.com/v1/games/" .. placeId .. "/servers/Public?limit=20")
+        end)
+        
+        if success and result then
+            local data = game:GetService("HttpService"):JSONDecode(result)
+            for _, server in pairs(data.data) do
+                if server.id ~= game.JobId and server.playing < server.maxPlayers then
+                    table.insert(servers, server.id)
+                end
+            end
+        end
+    end)
+    
+    if #servers > 0 then
+        local randomServer = servers[math.random(1, #servers)]
+        TeleportService:TeleportToPlaceInstance(placeId, randomServer, Player)
+    else
+        TeleportService:Teleport(placeId)
+    end
+end
+
+-- Main Farming Loop
+local IsFarming = false
+
+local function StartFarming()
+    if IsFarming then return end
+    
+    IsFarming = true
+    print("[Mobile] Farming started!")
+    
+    SelectTeam()
+    AntiBan.SafeWait(3)
+    
+    while IsFarming and Stats.FruitsCollected < Config.MaxFruits do
+        -- Find fruits
+        local fruits = FindFruits()
+        
+        if #fruits > 0 then
+            print("[Mobile] Found " .. #fruits .. " fruits")
+            
+            -- Collect each fruit
+            for _, fruitData in ipairs(fruits) do
+                if not IsFarming or Stats.FruitsCollected >= Config.MaxFruits then
+                    break
+                end
+                
+                local success = CollectFruit(fruitData.Object)
+                
+                if success then
+                    -- Update stats display
+                    if GUI and GUI.StatsLabel then
+                        GUI.StatsLabel.Text = string.format("Collected: %d\nServers: %d\nRunning: %ds",
+                            Stats.FruitsCollected, Stats.ServersHopped, os.time() - Stats.StartTime)
+                    end
+                end
+                
+                -- Random pause
+                if math.random(1, 100) <= 30 then
+                    AntiBan.SafeWait(math.random(1, 3))
+                end
+            end
+            
+            AntiBan.SafeWait(math.random(2, 4))
+            
+        else
+            print("[Mobile] No fruits found")
+            
+            -- Check if we should server hop
+            if Stats.FruitsCollected < 1 then
+                print("[Mobile] Server seems empty, hopping...")
+                SimpleServerHop()
+                IsFarming = false
+                break
+            else
+                print("[Mobile] Waiting for respawn...")
+                AntiBan.SafeWait(10)
+            end
+        end
+        
+        -- Mobile memory management
+        if Config.LowMemoryMode then
+            if math.random(1, 100) <= 20 then
+                wait() -- Yield for mobile performance
+            end
+        end
+    end
+    
+    print("[Mobile] Farming stopped. Total collected: " .. Stats.FruitsCollected)
+    IsFarming = false
+end
+
+local function StopFarming()
+    IsFarming = false
+    print("[Mobile] Stopping farm...")
+end
+
+-- Initialize Mobile Script
+local function InitializeMobile()
+    print("=================================")
+    print("Blox Fruit Mobile Farmer v1.0")
+    print("Optimized for Mobile Devices")
+    print("=================================")
+    
+    -- Wait for everything to load
+    AntiBan.SafeWait(3)
+    
+    -- Create mobile GUI
+    local gui = CreateMobileGUI()
+    GUI = gui
+    
+    -- Button Functions
+    gui.Buttons[1].MouseButton1Click:Connect(function()
+        if not IsFarming then
+            spawn(StartFarming)
+            gui.Buttons[1].Text = "Farming..."
+            gui.Buttons[1].BackgroundColor3 = Color3.fromRGB(0, 100, 0)
+        end
+    end)
+    
+    gui.Buttons[2].MouseButton1Click:Connect(function()
+        StopFarming()
+        gui.Buttons[1].Text = "Start Farm"
+        gui.Buttons[1].BackgroundColor3 = Color3.fromRGB(0, 170, 0)
+    end)
+    
+    gui.Buttons[3].MouseButton1Click:Connect(function()
+        local fruits = FindFruits()
+        if #fruits > 0 then
+            CollectFruit(fruits[1].Object)
+        else
+            print("[Mobile] No fruits nearby")
+        end
+    end)
+    
+    gui.Buttons[4].MouseButton1Click:Connect(function()
+        Config.SelectPirates = not Config.SelectPirates
+        local team = Config.SelectPirates and "Pirates" or "Marines"
+        gui.Buttons[4].Text = "Team: " .. team
+        SelectTeam()
+    end)
+    
+    gui.Buttons[5].MouseButton1Click:Connect(function()
+        SimpleServerHop()
+    end)
+    
+    gui.CloseButton.MouseButton1Click:Connect(function()
+        StopFarming()
+        gui.ScreenGui:Destroy()
+        GUI = nil
+    end)
+    
+    -- Auto select team on start
+    if Config.AutoSelectTeam then
+        SelectTeam()
+    end
+    
+    -- Auto-start farming after delay
+    AntiBan.SafeWait(5)
+    if Config.AutoSelectTeam then
+        print("[Mobile] Auto-starting in 5 seconds...")
+        AntiBan.SafeWait(5)
+        spawn(StartFarming)
+        gui.Buttons[1].Text = "Farming..."
+        gui.Buttons[1].BackgroundColor3 = Color3.fromRGB(0, 100, 0)
+    end
+    
+    print("[Mobile] Ready! Tap Start Farm to begin.")
+    print("=================================")
+end
+
+-- Check if on mobile
+local function IsMobileDevice()
+    local UIS = game:GetService("UserInputService")
+    return UIS.TouchEnabled
+end
+
+-- Main execution
+if IsMobileDevice() then
+    print("[System] Mobile device detected")
+    print("[System] Loading mobile-optimized version...")
+    
+    -- Wait for player
+    repeat
+        Character = Player.Character
+        wait(1)
+    until Character
+    
+    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+    
+    -- Start with delay
+    wait(3)
+    InitializeMobile()
+else
+    print("[System] Desktop detected")
+    print("[System] Consider using the full version for better features")
+    
+    -- Still run but warn user
+    wait(2)
+    InitializeMobile()
+end
+
+-- Cleanup
+game:GetService("Players").PlayerRemoving:Connect(function(leavingPlayer)
+    if leavingPlayer == Player then
+        StopFarming()
+        if GUI and GUI.ScreenGui then
+            GUI.ScreenGui:Destroy()
+        end
+        print("[Mobile] Script cleaned up")
+    end
+end)
+
+-- Memory management for mobile
+if Config.LowMemoryMode then
+    spawn(function()
+        while wait(30) do
+            collectgarbage()
+            if Stats.FruitsCollected % 5 == 0 then
+                print("[Mobile] Memory cleaned")
+            end
+        end
+    end)
+end
+
+-- Return simple API
+return {
+    Start = StartFarming,
+    Stop = StopFarming,
+    GetStats = function() return Stats end,
+    IsMobile = IsMobileDevice()
+}
